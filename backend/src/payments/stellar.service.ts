@@ -33,12 +33,13 @@ export async function verifyStellarPayment(params: VerifyParams): Promise<Verify
       return { valid: false, reason: 'No payment to escrow address found in transaction' };
     }
 
-    // Find USDC payment (issuer: testnet USDC)
+    // Find USDC payment — must match both asset code and issuer to prevent XLM/fake-USDC substitution
+    const expectedIssuer = process.env.USDC_ISSUER;
     const usdcOps = paymentOps.filter((op) => {
       const payOp = op as StellarSdk.Horizon.ServerApi.PaymentOperationRecord;
       return (
-        payOp.asset_code === 'USDC' ||
-        payOp.asset_type === 'native' // accept XLM as fallback for testnet demos
+        payOp.asset_code === 'USDC' &&
+        (!expectedIssuer || payOp.asset_issuer === expectedIssuer)
       );
     });
 
