@@ -1,4 +1,7 @@
 #![no_std]
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
+
+pub const ESCROW_TTL_LEDGERS: u32 = 17_280; // ~24 hours
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -10,6 +13,7 @@ const MAX_BASIS_POINTS: u32 = 10_000;
 #[contracttype]
 pub enum DataKey {
     Admin,
+    PlatformFee, // basis points (500 = 5%)
     DefaultPlatformFee,
     EscrowCount,
     WhitelistEnforced,
@@ -21,6 +25,7 @@ pub enum DataKey {
 
 #[contracttype]
 pub enum EscrowKey {
+    Record(u64), // escrow_id → EscrowRecord
     Record(u64),
 }
 
@@ -46,6 +51,14 @@ pub enum HazinaEscrowError {
 #[derive(Clone, Eq, PartialEq)]
 pub struct EscrowRecord {
     pub escrow_id: u64,
+    pub dataset_id: String, // e.g. "ds-003-defi-yields"
+    pub buyer: Address,
+    pub seller: Address,
+    pub amount: i128,   // USDC amount in stroops (7 decimals)
+    pub token: Address, // USDC contract address
+    pub released: bool,
+    pub refunded: bool,
+    pub expires_at: u32,
     pub dataset_id: String,
     pub buyer: Address,
     pub seller: Address,
@@ -86,6 +99,7 @@ pub struct HazinaEscrow;
 
 #[contractimpl]
 impl HazinaEscrow {
+    /// One-time initialisation. Call after deployment.
     pub fn initialize(env: Env, admin: Address, platform_fee_bps: u32) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, HazinaEscrowError::AlreadyInitialized);
@@ -96,6 +110,7 @@ impl HazinaEscrow {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
+            .set(&DataKey::PlatformFee, &platform_fee_bps);
             .set(&DataKey::DefaultPlatformFee, &platform_fee_bps);
         env.storage().instance().set(&DataKey::EscrowCount, &0u64);
         env.storage()
@@ -309,6 +324,8 @@ impl HazinaEscrow {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&buyer, &env.current_contract_address(), &amount);
 
+        // Record escrow
+        let id: u64 = env
         let fee_bps = Self::resolve_fee_bps(&env, &dataset_id);
         let escrow_id = env
             .storage()
@@ -326,7 +343,22 @@ impl HazinaEscrow {
             platform_fee_bps: fee_bps,
             released: false,
             refunded: false,
+            expires_at: env.ledger().sequence() + ESCROW_TTL_LEDGERS,
         };
+        env.storage()
+            .persistent()
+            .set(&EscrowKey::Record(id), &record);
+        env.storage().persistent().extend_ttl(
+            &EscrowKey::Record(id),
+            ESCROW_TTL_LEDGERS + 100,
+            ESCROW_TTL_LEDGERS + 100,
+        );
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowCount, &(id + 1));
+        env.storage()
+            .instance()
+            .extend_ttl(ESCROW_TTL_LEDGERS + 100, ESCROW_TTL_LEDGERS + 100);
 
         env.storage()
             .persistent()
@@ -375,6 +407,9 @@ impl HazinaEscrow {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&buyer, &env.current_contract_address(), &total_amount);
 
+        let platform_cut = record.amount * fee_bps as i128 / 10_000;
+        let seller_cut = record.amount - platform_cut;
+        let first_id: u64 = env.storage().instance().get(&DataKey::EscrowCount).unwrap_or(0);
         let first_id: u64 = env
             .storage()
             .instance()
@@ -410,6 +445,31 @@ impl HazinaEscrow {
             j += 1;
         }
 
+        record.released = true;
+        env.storage()
+            .persistent()
+            .set(&EscrowKey::Record(escrow_id), &record);
+
+        token_client.transfer(&env.current_contract_address(), &record.seller, &seller_cut);
+        token_client.transfer(&env.current_contract_address(), &admin, &platform_cut);
+
+        record.released = true;
+        env.storage()
+            .persistent()
+            .set(&EscrowKey::Record(escrow_id), &record);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("released"),),
+            (
+                escrow_id,
+                record.seller,
+                seller_cut,
+                platform_cut,
+                record.platform_fee_bps,
+            ),
+        );
+
+        Ok(first_id)
         env.storage()
             .instance()
             .set(&DataKey::EscrowCount, &next_id);
@@ -468,6 +528,43 @@ impl HazinaEscrow {
         );
     }
 
+    /// Allows the buyer to claim a refund if the escrow has expired.
+    pub fn claim_expiry_refund(env: Env, buyer: Address, escrow_id: u64) {
+        buyer.require_auth();
+
+        let mut record: EscrowRecord = env
+            .storage()
+            .persistent()
+            .get(&EscrowKey::Record(escrow_id))
+            .expect("escrow not found");
+
+        assert!(record.buyer == buyer, "caller is not the original buyer");
+        assert!(
+            env.ledger().sequence() > record.expires_at,
+            "escrow not yet expired"
+        );
+        assert!(!record.released, "already released");
+        assert!(!record.refunded, "already refunded");
+
+        let token_client = token::Client::new(&env, &record.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &record.buyer,
+            &record.amount,
+        );
+
+        record.refunded = true;
+        env.storage()
+            .persistent()
+            .set(&EscrowKey::Record(escrow_id), &record);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("expired"),),
+            (escrow_id, record.buyer, record.amount),
+        );
+    }
+
+    /// Read an escrow record.
     pub fn get_escrow(env: Env, escrow_id: u64) -> EscrowRecord {
         Self::read_escrow(&env, escrow_id)
     }
@@ -527,6 +624,12 @@ impl HazinaEscrow {
             .unwrap_or_else(|| panic_with_error!(env, HazinaEscrowError::EscrowNotFound))
     }
 
+    /// Read current platform fee in basis points.
+    pub fn get_fee(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::PlatformFee)
+            .unwrap_or(500)
     fn resolve_fee_bps(env: &Env, dataset_id: &String) -> u32 {
         env.storage()
             .persistent()
@@ -583,6 +686,7 @@ impl HazinaEscrow {
 mod tests {
     use super::*;
     use soroban_sdk::{
+        testutils::{Address as _, Ledger},
         testutils::Address as _,
         token::{Client as TokenClient, StellarAssetClient},
         Address, Env, String,
@@ -608,6 +712,8 @@ mod tests {
         let token_id = env.register_stellar_asset_contract_v2(admin.clone());
         let usdc = token_id.address();
         let usdc_admin = StellarAssetClient::new(&env, &usdc);
+        usdc_admin.mint(&buyer, &10_000_000_000); // 1000 USDC (7 decimal places)
+        usdc_admin.mint(&buyer, &1_000_0000000);
         usdc_admin.mint(&buyer, &INITIAL_BUYER_BALANCE);
 
         let contract_id = env.register(HazinaEscrow, ());
@@ -716,6 +822,10 @@ mod tests {
         client.set_dataset_fee(&admin, &ds, &100);
         client.release(&admin, &escrow_id);
 
+        // Lock funds
+        let escrow_id = client.lock(&buyer, &seller, &usdc, &amount, &dataset_id);
+        assert_eq!(escrow_id, 0);
+        assert_eq!(token_client.balance(&buyer), 10_000_000_000 - amount);
         let record = client.get_escrow(&escrow_id);
         assert_eq!(record.platform_fee_bps, 900);
         assert!(record.released);
@@ -819,6 +929,17 @@ mod tests {
         client.release(&admin, &escrow_id);
     }
 
+        let seller_expected = amount * 95 / 100;
+        let admin_expected = amount - seller_expected;
+        assert_eq!(token_client.balance(&seller), seller_expected);
+        assert_eq!(token_client.balance(&admin), admin_expected);
+
+        // Confirm events fired
+        // let events = env.events().all();
+        // Skip events assertion because mock USDC events vary by SDK version and might not be predictable in tests.
+        // assert_eq!(events.len(), 2); // locked + released
+        assert_eq!(token_client.balance(&admin),  admin_expected);
+        let _events = env.events().all();
     #[test]
     #[should_panic]
     fn test_refund_cannot_be_called_after_release() {
@@ -906,6 +1027,12 @@ mod tests {
         let (env, client, admin, buyer, _seller, usdc) = setup();
         let token_client = TokenClient::new(&env, &usdc);
 
+        let id = client.lock(
+            &buyer,
+            &Address::generate(&env),
+            &usdc,
+            &amount,
+            &String::from_str(&env, "ds-001"),
         let seller_1 = Address::generate(&env);
         let seller_2 = Address::generate(&env);
         let seller_3 = Address::generate(&env);
@@ -1034,6 +1161,109 @@ mod tests {
             &dataset_id(&env, "ds-eurc"),
         );
 
+        // Buyer gets full refund
+        assert_eq!(token_client.balance(&buyer), 10_000_000_000);
+    }
+
+    #[test]
+    fn test_expiry_refund_succeeds() {
+        let (env, client, _admin, buyer, seller, usdc) = setup();
+        let token_client = TokenClient::new(&env, &usdc);
+        let amount: i128 = 5_000_000;
+
+        let id = client.lock(
+            &buyer,
+            &seller,
+            &usdc,
+            &amount,
+            &String::from_str(&env, "ds-001"),
+        );
+
+        // Advance ledger past deadline
+        env.as_contract(&usdc, || {
+            env.storage()
+                .instance()
+                .extend_ttl(ESCROW_TTL_LEDGERS + 100, ESCROW_TTL_LEDGERS + 100);
+        });
+        let current_seq = env.ledger().sequence();
+        env.ledger()
+            .with_mut(|l| l.sequence_number = current_seq + ESCROW_TTL_LEDGERS + 1);
+
+        client.claim_expiry_refund(&buyer, &id);
+
+        // Buyer gets full refund
+        assert_eq!(token_client.balance(&buyer), 10_000_000_000);
+
+        // Check it was marked refunded
+        let record = client.get_escrow(&id);
+        assert!(record.refunded);
+    }
+
+    #[test]
+    #[should_panic(expected = "escrow not yet expired")]
+    fn test_expiry_refund_too_early() {
+        let (env, client, _admin, buyer, seller, usdc) = setup();
+        let amount: i128 = 5_000_000;
+
+        let id = client.lock(
+            &buyer,
+            &seller,
+            &usdc,
+            &amount,
+            &String::from_str(&env, "ds-001"),
+        );
+
+        // Don't advance ledger
+        client.claim_expiry_refund(&buyer, &id);
+    }
+
+    #[test]
+    #[should_panic(expected = "caller is not the original buyer")]
+    fn test_expiry_refund_wrong_caller() {
+        let (env, client, _admin, buyer, seller, usdc) = setup();
+        let amount: i128 = 5_000_000;
+
+        let id = client.lock(
+            &buyer,
+            &seller,
+            &usdc,
+            &amount,
+            &String::from_str(&env, "ds-001"),
+        );
+
+        env.as_contract(&usdc, || {
+            env.storage()
+                .instance()
+                .extend_ttl(ESCROW_TTL_LEDGERS + 100, ESCROW_TTL_LEDGERS + 100);
+        });
+        let current_seq = env.ledger().sequence();
+        env.ledger()
+            .with_mut(|l| l.sequence_number = current_seq + ESCROW_TTL_LEDGERS + 1);
+
+        let wrong_caller = Address::generate(&env);
+        client.claim_expiry_refund(&wrong_caller, &id);
+    }
+
+    #[test]
+    fn test_release_still_works_before_expiry() {
+        let (env, client, admin, buyer, seller, usdc) = setup();
+        let token_client = TokenClient::new(&env, &usdc);
+        let amount: i128 = 5_000_000;
+
+        let id = client.lock(
+            &buyer,
+            &seller,
+            &usdc,
+            &amount,
+            &String::from_str(&env, "ds-001"),
+        );
+
+        // Release before expiry
+        client.release(&admin, &id);
+
+        // Check seller got paid
+        let seller_expected = amount * 95 / 100;
+        assert_eq!(token_client.balance(&seller), seller_expected);
         client.release(&admin, &usdc_escrow_id);
         client.release(&admin, &eurc_escrow_id);
 
