@@ -244,12 +244,13 @@ export const sw: EnglishMessages = {
       quickPricePresets: "Bei za haraka:",
       sellerWallet: "Anwani yako ya Stellar Wallet",
       sellerWalletPlaceholder: "G... (ufunguo wa umma wa Stellar wa herufi 56)",
-      sellerWalletError: "Anwani za Stellar zina herufi 56 na huanza na G",
+      sellerWalletError:
+        "Weka ufunguo halali wa umma wa Stellar (unaanza na G, unatumia A-Z au 2-7, na una herufi 56 kamili)",
       sellerWalletHelp:
         "95% ya kila malipo ya swali hutumwa hapa kiotomatiki",
       datasetJson: "Dataset (JSON)",
-      uploadFileTitle: "Pakia faili ya JSON au CSV",
-      uploadFileSubtitle: "Kiwango cha juu 10MB",
+      uploadFileTitle: "Pakia faili ya JSON",
+      uploadFileSubtitle: "JSON pekee, kiwango cha juu 10MB",
       dataPlaceholder:
         "Bandika data yako ya JSON hapa...\n\nMfano:\n{\n  \"wallets\": [\n    { \"address\": \"0x...\", \"balance\": 42847 }\n  ]\n}",
       submit: "Chapisha sokoni",

@@ -6,11 +6,11 @@ Implement a centralized theme management system using React Context, refactor `T
 
 ## Tasks
 
-- [x] 1. Configure Tailwind dark mode strategy
+- [ ] 1. Configure Tailwind dark mode strategy
   - Add `darkMode: 'class'` to `tailwind.config.js`
   - _Requirements: 6.1_
 
-- [x] 2. Create ThemeContext with provider and hook
+- [ ] 2. Create ThemeContext with provider and hook
   - Create `frontend/src/context/ThemeContext.tsx`
   - Implement `getInitialTheme()` — reads `localStorage`, falls back to `prefers-color-scheme`, defaults to `"dark"`
   - Implement `ThemeProvider` — owns `theme` state, syncs `dark` class on `document.documentElement` and writes to `localStorage` in a `useEffect`

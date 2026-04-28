@@ -245,12 +245,13 @@ export const fr: EnglishMessages = {
       quickPricePresets: "Tarifs rapides :",
       sellerWallet: "Votre adresse Stellar",
       sellerWalletPlaceholder: "G... (clé publique Stellar de 56 caractères)",
-      sellerWalletError: "Les adresses Stellar comportent 56 caractères et commencent par G",
+      sellerWalletError:
+        "Saisissez une cle publique Stellar valide (commence par G, utilise A-Z ou 2-7 et comporte exactement 56 caracteres)",
       sellerWalletHelp:
         "95 % de chaque paiement de requête est envoyé ici automatiquement",
       datasetJson: "Dataset (JSON)",
-      uploadFileTitle: "Téléverser un fichier JSON ou CSV",
-      uploadFileSubtitle: "Max 10 Mo",
+      uploadFileTitle: "Téléverser un fichier JSON",
+      uploadFileSubtitle: "JSON uniquement, max 10 Mo",
       dataPlaceholder:
         "Collez vos données JSON ici...\n\nExemple :\n{\n  \"wallets\": [\n    { \"address\": \"0x...\", \"balance\": 42847 }\n  ]\n}",
       submit: "Publier sur la marketplace",
