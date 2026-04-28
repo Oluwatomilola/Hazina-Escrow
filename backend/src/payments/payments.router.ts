@@ -239,6 +239,7 @@ paymentsRouter.post("/verify/:id", validateBody(verifySchema), async (req: Reque
     let sellerPaid = false;
     try {
       releaseTxHash = await releaseEscrow(escrowId);
+      sellerPaid = true;
       console.log(`[Escrow] Released escrow #${escrowId} → ${releaseTxHash}`);
     } catch (releaseErr) {
       console.error("[Escrow] Release failed:", releaseErr);
@@ -258,8 +259,6 @@ paymentsRouter.post("/verify/:id", validateBody(verifySchema), async (req: Reque
       amount: dataset.pricePerQuery,
       sellerPaid,
       sellerAmount,
-      sellerTxHash,
-      sellerPayoutError,
       buyerQuery: buyerQuestion,
       aiSummary: summary,
       timestamp: new Date().toISOString(),
@@ -272,7 +271,7 @@ paymentsRouter.post("/verify/:id", validateBody(verifySchema), async (req: Reque
       escrowId,
       amount: dataset.pricePerQuery,
       buyerQuery: buyerQuestion,
-    }).catch(() => {});
+    }).catch(() => { });
 
     if (releaseTxHash) {
       notifySeller(dataset.sellerWallet, "payment.forwarded", {
@@ -280,7 +279,7 @@ paymentsRouter.post("/verify/:id", validateBody(verifySchema), async (req: Reque
         datasetName: dataset.name,
         releaseTxHash,
         amount: sellerAmount,
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     return res.json({
