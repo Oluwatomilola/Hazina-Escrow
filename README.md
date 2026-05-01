@@ -72,6 +72,9 @@ Buyer           Contract              Seller
 | Function | Who Calls It | What It Does |
 |---|---|---|
 | `initialize(admin, fee_bps)` | Deployer (once) | Sets the admin address and default platform fee (500 = 5%) |
+| `pause(admin)` | Hazina backend (admin) | Emergency circuit breaker: disables `lock`/`lock_multi` and `release`/`release_multi` |
+| `unpause(admin)` | Hazina backend (admin) | Resumes normal operations after a pause |
+| `is_paused()` | Anyone | Returns whether the contract is currently paused |
 | `set_default_fee(admin, fee_bps)` | Hazina backend (admin) | Updates the fallback fee used when no dataset override exists |
 | `set_dataset_fee(admin, dataset_id, fee_bps)` | Hazina backend (admin) | Sets a custom platform fee for a specific dataset |
 | `clear_dataset_fee(admin, dataset_id)` | Hazina backend (admin) | Removes a dataset-specific fee override |
@@ -355,7 +358,7 @@ Edit `backend/.env`:
 
 ```bash
 PORT=3001
-FRONTEND_URL=http://localhost:5173
+CORS_ALLOWED_ORIGINS=http://localhost:5173
 
 # Required
 ANTHROPIC_API_KEY=sk-ant-...
@@ -558,7 +561,8 @@ All seller wallets are funded Stellar testnet accounts with USDC trustlines, rea
 | `ESCROW_CONTRACT_ID` | No | Soroban contract address (for on-chain escrow integration) |
 | `PLATFORM_FEE` | No | Platform cut as decimal (default: 0.05) |
 | `PORT` | No | API port (default: 3001) |
-| `FRONTEND_URL` | No | CORS origin (default: http://localhost:5173) |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated CORS origin whitelist (development default: http://localhost:5173) |
+| `FRONTEND_URL` | No | Legacy single CORS origin fallback when `CORS_ALLOWED_ORIGINS` is unset |
 
 ---
 

@@ -6,11 +6,12 @@ dotenv.config();
 initializeDatadog();
 initializeSentry();
 
-import express, { Request } from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
+import http from 'http';
 import rateLimit from 'express-rate-limit';
-import swaggerUi from 'swagger-ui-express';
+import _swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 
 import { datasetsRouter } from './datasets/datasets.router';
@@ -21,6 +22,9 @@ import { readStore } from './common/storage';
 import { BackupScheduler } from './common/backup.scheduler';
 import { backupRouter, setBackupScheduler } from './common/backup.router';
 import { createCompressionMiddleware } from './common/compression';
+import { initializeWebSocketServer } from './websocket/ws-server';
+import { HORIZON_URL } from './lib/stellar.config';
+import { createCorsOptions } from './common/cors';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -30,7 +34,7 @@ app.use(createCompressionMiddleware());
 // Ensure client IP is derived correctly when running behind a reverse proxy.
 app.set('trust proxy', 1);
 
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }));
+app.use(cors(createCorsOptions()));
 app.use(express.json({ limit: '2mb' }));
 Sentry.setupExpressErrorHandler(app);
 
@@ -116,12 +120,9 @@ const swaggerOptions = {
   apis: ['./src/**/*.ts'], // Path to the API docs
 };
 
-const swaggerDocs = swaggerJsdoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
-
+const _swaggerDocs = swaggerJsdoc(swaggerOptions);
 // Health check with service monitoring
 const HEALTH_TIMEOUT_MS = 3000;
-const HORIZON_URL = 'https://horizon-testnet.stellar.org/';
 
 type CheckResult = 'ok' | 'error';
 
@@ -134,7 +135,7 @@ async function withHealthTimeout(fn: () => Promise<CheckResult>): Promise<CheckR
 
 async function checkStorage(): Promise<CheckResult> {
   try {
-    readStore();
+    await readStore();
     return 'ok';
   } catch {
     return 'error';
@@ -205,14 +206,46 @@ app.use('/api/agent', agentRouter);
 app.use('/api/webhooks', webhooksRouter);
 app.use('/api', backupRouter);
 
-app.listen(PORT, () => {
+// Create HTTP server and attach Express app
+const server = http.createServer(app);
+
+// Initialize WebSocket server
+const wsApiKey = process.env.WEBSOCKET_API_KEY || '';
+const wsServer = initializeWebSocketServer(server, wsApiKey);
+
+// Add endpoint for WebSocket server stats
+app.get('/api/ws/stats', (_req: Request, res: Response) => {
+  res.json(wsServer.getStats());
+});
+
+server.listen(PORT, () => {
   console.log(`\n  ██╗  ██╗ █████╗ ███████╗██╗███╗   ██╗ █████╗`);
   console.log(`  ██║  ██║██╔══██╗╚══███╔╝██║████╗  ██║██╔══██╗`);
   console.log(`  ███████║███████║  ███╔╝ ██║██╔██╗ ██║███████║`);
   console.log(`  ██╔══██║██╔══██║ ███╔╝  ██║██║╚██╗██║██╔══██║`);
   console.log(`  ██║  ██║██║  ██║███████╗██║██║ ╚████║██║  ██║`);
   console.log(`  ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝`);
-  console.log(`\n  Data Escrow API running on http://localhost:${PORT}\n`);
+  console.log(`\n  Data Escrow API running on http://localhost:${PORT}`);
+  console.log(`  WebSocket server running on ws://localhost:${PORT}/ws\n`);
+});
+
+// Graceful shutdown for WebSocket server
+process.on('SIGTERM', () => {
+  console.log('[Server] Shutting down gracefully...');
+  wsServer.shutdown();
+  server.close(() => {
+    console.log('[Server] HTTP server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('[Server] Shutting down gracefully...');
+  wsServer.shutdown();
+  server.close(() => {
+    console.log('[Server] HTTP server closed');
+    process.exit(0);
+  });
 });
 
 export default app;

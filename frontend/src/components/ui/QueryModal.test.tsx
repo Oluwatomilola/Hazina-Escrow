@@ -77,7 +77,14 @@ describe('QueryModal', () => {
       expect(api.initiateQuery).toHaveBeenCalledWith('ds-query-1');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Get AI Analysis' }));
+    // Demo mode is OFF by default — check it to enable demo mode
+    fireEvent.click(screen.getByLabelText(/Demo mode/i));
+
+    // Now in demo mode — button reads "Get AI Analysis"
+    const analyzeButton = await waitFor(() =>
+      screen.getByRole('button', { name: 'Get AI Analysis' }),
+    );
+    fireEvent.click(analyzeButton);
 
     await waitFor(() => {
       expect(screen.getByText('Payment Verified')).toBeTruthy();
@@ -87,8 +94,54 @@ describe('QueryModal', () => {
     expect(onSuccess).toHaveBeenCalledWith({
       id: 'ds-query-1',
       queriesServed: 13,
-      totalEarned: 3.5475,
+      totalEarned: 3.5,
     });
+  });
+
+  it('revokes the Object URL after downloading JSON', async () => {
+    const createObjectURL = vi.fn(() => 'blob:mock');
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, writable: true });
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, writable: true });
+
+    vi.mocked(api.demoQuery).mockResolvedValueOnce({
+      success: true,
+      demo: true,
+      data: { rows: [1, 2] },
+      ai: {
+        summary: 'Summary text',
+        answer: 'Answer text',
+      },
+      transaction: {
+        hash: 'demo-hash',
+        amount: 0.05,
+        sellerReceived: 0.0475,
+        platformFee: 0.0025,
+      },
+    });
+
+    renderModal();
+    fireEvent.click(screen.getByRole('button', { name: 'Proceed to Payment' }));
+
+    await waitFor(() => {
+      expect(api.initiateQuery).toHaveBeenCalledWith('ds-query-1');
+    });
+
+    // Check demo mode to enable it
+    fireEvent.click(screen.getByLabelText(/Demo mode/i));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get AI Analysis' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Payment Verified')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download JSON' }));
+
+    await waitFor(() => {
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock');
+    });
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
   });
 
   it('shows error state for failed verification and allows retry', async () => {
@@ -101,9 +154,10 @@ describe('QueryModal', () => {
       expect(api.initiateQuery).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByLabelText(/Demo mode/i));
-
-    const verifyButton = screen.getByRole('button', { name: 'Verify & Get Data' });
+    // Demo mode is OFF by default — button is "Verify & Get Data" and disabled (no tx hash)
+    const verifyButton = await waitFor(() =>
+      screen.getByRole('button', { name: 'Verify & Get Data' }),
+    );
     expect(verifyButton).toHaveProperty('disabled', true);
 
     fireEvent.change(screen.getByPlaceholderText('Paste your Stellar transaction hash...'), {
