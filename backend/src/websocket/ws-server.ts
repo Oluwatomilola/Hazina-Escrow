@@ -30,11 +30,16 @@ export class WebSocketServer_Hazina {
   private clientCounter: number = 0;
   private heartbeatInterval: NodeJS.Timer | null = null;
   private apiKey: string;
+  private readonly MAX_SUBSCRIPTIONS_PER_CLIENT = 100; // Prevent memory exhaustion attacks
 
   constructor(httpServer: HTTPServer, apiKey: string = '') {
     this.apiKey = apiKey || process.env.WEBSOCKET_API_KEY || '';
 
-    this.wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+    this.wss = new WebSocketServer({
+      server: httpServer,
+      path: '/ws',
+      maxPayload: 64 * 1024, // 64 KB limit to prevent DoS attacks
+    });
 
     this.wss.on('connection', (ws, req) => {
       this.handleConnection(ws, req);
@@ -46,7 +51,7 @@ export class WebSocketServer_Hazina {
     // Listen for transaction events
     this.attachEventListeners();
 
-    console.log('[WebSocket] Server initialized on /ws');
+    console.log('[WebSocket] Server initialized on /ws with 64KB payload limit');
   }
 
   /**
@@ -133,6 +138,23 @@ export class WebSocketServer_Hazina {
     // Validate API key if provided
     if (msg.token && this.apiKey && msg.token !== this.apiKey) {
       this.sendError(clientId, 'Unauthorized', 'UNAUTHORIZED');
+      return;
+    }
+
+    // Calculate total subscriptions after this request
+    const currentTotal = session.subscribed.datasetIds.size + session.subscribed.transactionIds.size;
+    const newDatasetIds = msg.datasetIds?.filter(id => !session.subscribed.datasetIds.has(id)) || [];
+    const newTransactionIds = msg.transactionIds?.filter(id => !session.subscribed.transactionIds.has(id)) || [];
+    const totalAfterSubscribe = currentTotal + newDatasetIds.length + newTransactionIds.length;
+
+    // Enforce per-client subscription limit
+    if (totalAfterSubscribe > this.MAX_SUBSCRIPTIONS_PER_CLIENT) {
+      this.sendError(
+        clientId,
+        `Subscription limit exceeded. Maximum ${this.MAX_SUBSCRIPTIONS_PER_CLIENT} subscriptions per client.`,
+        'SUBSCRIPTION_LIMIT_EXCEEDED'
+      );
+      console.warn(`[WebSocket] ${clientId} exceeded subscription limit (${totalAfterSubscribe}/${this.MAX_SUBSCRIPTIONS_PER_CLIENT})`);
       return;
     }
 
