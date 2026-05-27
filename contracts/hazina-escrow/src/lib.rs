@@ -15,6 +15,11 @@ const ESCROW_MIN_TTL: u32 = 17_280;
 
 const MAX_BASIS_POINTS: u32 = 10_000;
 
+// Safety cap on the platform fee: 2_000 bps = 20%. Applies to both the
+// default fee and per-dataset overrides. Existing escrows are unaffected
+// because each EscrowRecord snapshots its fee at lock time.
+const MAX_FEE_BPS: u32 = 2_000;
+
 // ─── Storage keys ───────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -53,7 +58,7 @@ pub enum HazinaEscrowError {
 }
 
 #[contracttype]
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct EscrowRecord {
     pub escrow_id: u64,
     pub dataset_id: String,
@@ -167,20 +172,6 @@ impl HazinaEscrow {
         admin.require_auth();
         Self::assert_admin(&env, &admin);
         env.deployer().update_current_contract_wasm(new_wasm_hash);
-    }
-
-    /// Update platform fee (max 1000 bps = 10%). Only admin.
-    pub fn update_fee(env: Env, admin: Address, new_fee_bps: u32) {
-        admin.require_auth();
-        Self::assert_admin(&env, &admin);
-        assert!(new_fee_bps <= 1_000, "fee too high");
-        env.storage()
-            .instance()
-            .set(&DataKey::DefaultPlatformFee, &new_fee_bps);
-        env.events().publish(
-            (soroban_sdk::symbol_short!("fee_upd"),),
-            (admin, new_fee_bps),
-        );
     }
 
     pub fn set_dataset_fee(env: Env, admin: Address, dataset_id: String, fee_bps: u32) {
@@ -542,7 +533,7 @@ impl HazinaEscrow {
     }
 
     fn assert_valid_fee(env: &Env, fee_bps: u32) {
-        if fee_bps > MAX_BASIS_POINTS {
+        if fee_bps > MAX_FEE_BPS {
             panic_with_error!(env, HazinaEscrowError::InvalidFeeBps);
         }
     }
@@ -719,10 +710,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_set_default_fee_rejects_invalid_fee() {
+    #[should_panic(expected = "Error(Contract, #4)")]
+    fn test_set_default_fee_rejects_fee_above_cap() {
         let (_env, client, admin, _buyer, _seller, _usdc) = setup();
-        client.set_default_fee(&admin, &10_001);
+        client.set_default_fee(&admin, &(MAX_FEE_BPS + 1));
     }
 
     #[test]
@@ -1145,15 +1136,33 @@ mod tests {
     #[test]
     fn test_set_fee_max_boundary() {
         let (_, client, admin, _, _, _) = setup();
-        client.set_fee(&admin, &10_000);
-        assert_eq!(client.get_fee(), 10_000);
+        client.set_fee(&admin, &MAX_FEE_BPS);
+        assert_eq!(client.get_fee(), MAX_FEE_BPS);
     }
 
     #[test]
     #[should_panic(expected = "Error(Contract, #4)")]
-    fn test_set_fee_rejects_over_10000() {
+    fn test_set_fee_rejects_above_cap() {
         let (_, client, admin, _, _, _) = setup();
-        client.set_fee(&admin, &10_001);
+        client.set_fee(&admin, &(MAX_FEE_BPS + 1));
+    }
+
+    #[test]
+    fn test_set_fee_does_not_affect_existing_escrows() {
+        let (env, client, admin, buyer, seller, usdc) = setup();
+        let escrow_id = client.lock(
+            &buyer,
+            &seller,
+            &usdc,
+            &1_000_000,
+            &dataset_id(&env, "ds-fee-snapshot"),
+        );
+
+        // Default at lock time was 500 bps; change it now and confirm the
+        // existing escrow still carries the old fee.
+        client.set_fee(&admin, &MAX_FEE_BPS);
+        let record = client.get_escrow(&escrow_id);
+        assert_eq!(record.platform_fee_bps, 500);
     }
 
     #[test]
@@ -1346,7 +1355,7 @@ mod fuzz_tests {
 
         /// set_fee persists arbitrary valid fee values correctly.
         #[test]
-        fn prop_set_fee_roundtrip(new_fee in 0u32..=10_000u32) {
+        fn prop_set_fee_roundtrip(new_fee in 0u32..=MAX_FEE_BPS) {
             let env = Env::default();
             env.mock_all_auths();
             let admin = Address::generate(&env);
@@ -1387,7 +1396,7 @@ mod fuzz_tests {
         /// Release after lock: combined payout always equals locked amount.
         #[test]
         fn prop_release_pays_out_full_amount(
-            fee_bps in 0u32..=10_000u32,
+            fee_bps in 0u32..=MAX_FEE_BPS,
             amount  in 1i128..=500_000_000i128,
         ) {
             let env = Env::default();
