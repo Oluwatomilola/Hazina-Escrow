@@ -7,7 +7,8 @@ initializeDatadog();
 initializeSentry();
 
 import 'express-async-errors';
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'crypto';
 import cors from 'cors';
 import path from 'path';
 import http from 'http';
@@ -34,6 +35,16 @@ const PORT = process.env.PORT || 3001;
 app.use(createCompressionMiddleware());
 // Ensure client IP is derived correctly when running behind a reverse proxy.
 app.set('trust proxy', 1);
+
+// Request correlation ID middleware — runs before all routes so every log line
+// and error response can include the same unique ID for a given request.
+// Honours a forwarded x-request-id from the client (e.g. the frontend or an
+// upstream proxy); falls back to a fresh UUID when none is provided.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  req.id = (req.headers['x-request-id'] as string) || randomUUID();
+  res.setHeader('x-request-id', req.id);
+  next();
+});
 
 app.use(cors(createCorsOptions()));
 app.use(express.json({ limit: '2mb' }));
@@ -200,12 +211,12 @@ app.use('/api/webhooks', webhooksRouter);
 app.use('/api', backupRouter);
 
 // Global error handling middleware — Issue #283 (standard error shape)
-app.use((err: any, _req: Request, res: Response, _next: () => void) => {
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
   const status = err.status ?? 500;
   const message = err.message || 'Internal server error';
-  console.error('[Global Error Handler]', err);
+  console.error(`[Global Error Handler] [requestId=${req.id}]`, err);
   Sentry.captureException(err);
-  res.status(status).json({ error: message, code: err.code || 'INTERNAL_ERROR' });
+  res.status(status).json({ error: message, code: err.code || 'INTERNAL_ERROR', requestId: req.id });
 });
 
 startDeliveryRetryWorker();
