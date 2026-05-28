@@ -8,6 +8,7 @@ initializeSentry();
 
 import 'express-async-errors';
 import express, { Request, Response, NextFunction } from 'express';
+import pino = require('pino');
 import { randomUUID } from 'crypto';
 import cors from 'cors';
 import path from 'path';
@@ -35,7 +36,38 @@ import { createCorsOptions } from './common/cors';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Compress all compressible API responses (brotli preferred, gzip fallback)
+const isProduction = process.env.NODE_ENV === 'production';
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  redact: {
+    paths: [
+      'req.headers.authorization',
+      'req.headers.cookie',
+      'headers.authorization',
+      'headers.cookie',
+    ],
+    censor: '[REDACTED]',
+  },
+  ...(isProduction
+    ? {}
+    : {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'SYS:standard',
+            ignore: 'pid,hostname',
+          },
+        },
+      }),
+});
+
+const sanitizeHeaders = (headers: Record<string, unknown>) => ({
+  ...headers,
+  ...(headers.authorization ? { authorization: '[REDACTED]' } : {}),
+  ...(headers.cookie ? { cookie: '[REDACTED]' } : {}),
+});
+
 app.use(createCompressionMiddleware());
 // Ensure client IP is derived correctly when running behind a reverse proxy.
 app.set('trust proxy', 1);
@@ -47,6 +79,50 @@ app.set('trust proxy', 1);
 app.use((req: Request, res: Response, next: NextFunction) => {
   req.id = (req.headers['x-request-id'] as string) || randomUUID();
   res.setHeader('x-request-id', req.id);
+  next();
+});
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const startTime = Date.now();
+  const requestLogger = logger.child({ requestId: req.id });
+
+  const onFinish = () => {
+    const durationMs = Date.now() - startTime;
+
+    const logPayload = {
+      method: req.method,
+      url: req.originalUrl || req.url,
+      statusCode: res.statusCode,
+      durationMs,
+      headers: sanitizeHeaders(req.headers as Record<string, unknown>),
+    };
+
+    if (res.statusCode >= 500) {
+      requestLogger.error(logPayload, 'HTTP request completed');
+    } else if (res.statusCode >= 400) {
+      requestLogger.warn(logPayload, 'HTTP request completed');
+    } else {
+      requestLogger.info(logPayload, 'HTTP request completed');
+    }
+  };
+
+  res.on('finish', onFinish);
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      const durationMs = Date.now() - startTime;
+      requestLogger.warn(
+        {
+          method: req.method,
+          url: req.originalUrl || req.url,
+          statusCode: res.statusCode,
+          durationMs,
+          headers: sanitizeHeaders(req.headers as Record<string, unknown>),
+        },
+        'HTTP request aborted',
+      );
+    }
+  });
+
   next();
 });
 
