@@ -7,9 +7,10 @@ type CorsEnv = {
   FRONTEND_URL?: string;
   NODE_ENV?: string;
 };
+type CorsEnv = Partial<Pick<NodeJS.ProcessEnv, 'CORS_ALLOWED_ORIGINS' | 'FRONTEND_URL' | 'NODE_ENV'>>;
 
 export function parseCorsAllowedOrigins(env: CorsEnv = process.env): string[] {
-  const configuredOrigins = env.CORS_ALLOWED_ORIGINS ?? env.FRONTEND_URL;
+  const configuredOrigins = env.CORS_ALLOWED_ORIGINS || env.FRONTEND_URL;
 
   if (!configuredOrigins) {
     if (env.NODE_ENV === 'production') {

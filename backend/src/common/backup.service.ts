@@ -1,6 +1,7 @@
 import { promises as fs, existsSync } from 'fs';
 import path from 'path';
-import { readStore } from './storage';
+
+const DATA_PATH = path.join(__dirname, '../../../data/datasets.json');
 
 export interface BackupConfig {
   enabled: boolean;
@@ -47,39 +48,46 @@ export class BackupService {
       const filename = `backup-${timestamp}.json`;
       const backupPath = path.join(this.config.backupDir, filename);
 
-      // Read current store
-      const store = await readStore();
+      // Read raw bytes once — avoids the parse→object→stringify round-trip that
+      // readStore() + JSON.stringify(backupData) would cause (peak ~3× file size).
+      const rawData = existsSync(DATA_PATH)
+        ? await fs.readFile(DATA_PATH, 'utf-8')
+        : JSON.stringify({ datasets: [], transactions: [], webhooks: [] });
 
-      // Write backup
-      const backupData = {
-        metadata: {
-          timestamp: new Date().toISOString(),
-          version: '1.0.0',
-          datasetsCount: store.datasets.length,
-          transactionsCount: store.transactions.length,
-        },
-        data: store,
-      };
+      // Parse once only to extract the two counts needed for metadata.
+      const parsed = JSON.parse(rawData) as { datasets?: unknown[]; transactions?: unknown[] };
+      const datasetsCount = parsed.datasets?.length ?? 0;
+      const transactionsCount = parsed.transactions?.length ?? 0;
+      const nowIso = new Date().toISOString();
 
-      await fs.writeFile(backupPath, JSON.stringify(backupData, null, 2), 'utf-8');
+      // Write backup in three sequential chunks: header + raw store bytes + closing brace.
+      // This never materialises a second full JSON string in memory.
+      const fh = await fs.open(backupPath, 'w');
+      try {
+        await fh.write(
+          `{"metadata":${JSON.stringify({ timestamp: nowIso, version: '1.0.0', datasetsCount, transactionsCount })},"data":`,
+        );
+        await fh.write(rawData);
+        await fh.write('}');
+      } finally {
+        await fh.close();
+      }
 
       const stats = await fs.stat(backupPath);
       const metadata: BackupMetadata = {
-        timestamp: new Date().toISOString(),
+        timestamp: nowIso,
         filename,
         size: stats.size,
-        datasetsCount: store.datasets.length,
-        transactionsCount: store.transactions.length,
+        datasetsCount,
+        transactionsCount,
       };
 
       console.log(
         `[Backup] Created backup: ${filename} (${this.formatBytes(stats.size)}, ` +
-        `${metadata.datasetsCount} datasets, ${metadata.transactionsCount} transactions)`
+        `${datasetsCount} datasets, ${transactionsCount} transactions)`,
       );
 
-      // Rotate old backups
       await this.rotateBackups();
-
       return metadata;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -169,15 +177,14 @@ export class BackupService {
       }
 
       const backupContent = JSON.parse(await fs.readFile(backupPath, 'utf-8'));
-      const dataPath = path.join(__dirname, '../../../data/datasets.json');
 
       // Create a safety backup before restoring
       const safetyBackup = `pre-restore-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
       const safetyPath = path.join(this.config.backupDir, safetyBackup);
       
       // Read current data and save as safety backup
-      if (existsSync(dataPath)) {
-        const currentData = JSON.parse(await fs.readFile(dataPath, 'utf-8'));
+      if (existsSync(DATA_PATH)) {
+        const currentData = JSON.parse(await fs.readFile(DATA_PATH, 'utf-8'));
         const safetyData = {
           metadata: {
             timestamp: new Date().toISOString(),
@@ -191,7 +198,7 @@ export class BackupService {
       }
 
       // Restore the backup
-      await fs.writeFile(dataPath, JSON.stringify(backupContent.data, null, 2), 'utf-8');
+      await fs.writeFile(DATA_PATH, JSON.stringify(backupContent.data, null, 2), 'utf-8');
 
       console.log(`[Backup] Restored from backup: ${filename}`);
       console.log(`[Backup] Safety backup created: ${safetyBackup}`);
