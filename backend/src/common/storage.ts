@@ -5,6 +5,22 @@ const DATA_PATH = path.join(__dirname, '../../../data/datasets.json');
 
 const DATA_PATH = process.env.DATA_PATH || path.resolve(process.cwd(), 'data/datasets.json');
 
+async function writeStoreFile(store: Store): Promise<void> {
+  const tempPath = path.join(
+    path.dirname(DATA_PATH),
+    `.${path.basename(DATA_PATH)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  const serialized = JSON.stringify(store, null, 2);
+
+  try {
+    await fs.writeFile(tempPath, serialized, 'utf-8');
+    await fs.rename(tempPath, DATA_PATH);
+  } catch (err) {
+    await fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
+}
+
 export interface Dataset {
   id: string;
   name: string;
@@ -100,7 +116,7 @@ const pendingTxHashes = new Set<string>();
 async function readRaw(): Promise<Store> {
   if (!existsSync(DATA_PATH)) {
     const empty: Store = { datasets: [], transactions: [], webhooks: [] };
-    await fs.writeFile(DATA_PATH, JSON.stringify(empty, null, 2), 'utf-8');
+    await writeStoreFile(empty);
     return empty;
   }
   const raw = await fs.readFile(DATA_PATH, 'utf-8');
@@ -116,9 +132,7 @@ export async function readStore(): Promise<Store> {
 
 export async function writeStore(store: Store): Promise<void> {
   // Enqueue so concurrent external writes don't interleave
-  mutationQueue = mutationQueue.then(() =>
-    fs.writeFile(DATA_PATH, JSON.stringify(store, null, 2), 'utf-8'),
-  );
+  mutationQueue = mutationQueue.then(() => writeStoreFile(store));
   return mutationQueue;
 }
 
@@ -135,7 +149,7 @@ function enqueue<T>(fn: (store: Store) => Promise<[Store, T]>): Promise<T> {
     try {
       const store = await readRaw();
       const [updated, value] = await fn(store);
-      await fs.writeFile(DATA_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+      await writeStoreFile(updated);
       resolve(value);
     } catch (err) {
       reject(err);
