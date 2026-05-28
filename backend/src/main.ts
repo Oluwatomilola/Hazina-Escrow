@@ -13,7 +13,6 @@ import { randomUUID } from 'crypto';
 import cors from 'cors';
 import path from 'path';
 import http from 'http';
-import rateLimit from 'express-rate-limit';
 import _swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 
@@ -29,6 +28,11 @@ import { readStore } from './common/storage';
 import { BackupScheduler } from './common/backup.scheduler';
 import { backupRouter, setBackupScheduler } from './common/backup.router';
 import { createCompressionMiddleware } from './common/compression';
+import {
+  createAgentRateLimitMiddleware,
+  createGlobalRateLimitMiddleware,
+  createPaymentsRateLimitMiddleware,
+} from './common/rateLimit';
 import { initializeWebSocketServer } from './websocket/ws-server';
 import { HORIZON_URL } from './lib/stellar.config';
 import { createCorsOptions } from './common/cors';
@@ -130,45 +134,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(cors(createCorsOptions()));
 app.use(express.json({ limit: '2mb' }));
 app.use(sanitizeBody);
-Sentry.setupExpressErrorHandler(app);
+const globalLimiter = createGlobalRateLimitMiddleware();
+const paymentsLimiter = createPaymentsRateLimitMiddleware();
+const agentLimiter = createAgentRateLimitMiddleware();
 
-// Rate limiting — global + per-route limits for sensitive endpoints
-const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
-const ONE_HOUR_MS = 60 * 60 * 1000;
-
-const isDemoRoute = (req: Request): boolean => req.originalUrl.split('?')[0].endsWith('/demo');
-
-const globalLimiter = rateLimit({
-  windowMs: FIFTEEN_MINUTES_MS,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests' },
-});
-
-const strictLimiter = rateLimit({
-  windowMs: FIFTEEN_MINUTES_MS,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: isDemoRoute,
-  message: { error: 'Too many requests' },
-});
-
-const demoLimiter = rateLimit({
-  windowMs: ONE_HOUR_MS,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests' },
-});
-
-// Demo limiters first (more specific), then strict, then global on /api/v1
-app.use('/api/v1/verify/:id/demo', demoLimiter);
-app.use('/api/v1/agent/research/demo', demoLimiter);
-app.use('/api/v1/verify', strictLimiter);
-app.use('/api/v1/agent/research', strictLimiter);
+// Global rate limiting applies to all routes before route handlers run.
 app.use(globalLimiter);
+app.use('/api/v1/payments', paymentsLimiter);
+app.use('/api/v1/agent', agentLimiter);
+Sentry.setupExpressErrorHandler(app);
 
 // Initialize backup scheduler
 const backupEnabled = process.env.BACKUP_ENABLED !== 'false';
