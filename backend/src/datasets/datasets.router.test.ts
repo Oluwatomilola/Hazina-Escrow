@@ -7,8 +7,22 @@ vi.mock('../webhooks/webhook.service', () => ({
   notifySeller: vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock('./datasets.repository', () => ({
+  getAllDatasets: vi.fn(),
+  getDataset: vi.fn(),
+  addDataset: vi.fn(),
+  getTransactions: vi.fn(),
+  getTransactionsCount: vi.fn(),
+}));
+
 import { datasetsRouter } from './datasets.router';
-import { writeStore, type Dataset, type Store, type Transaction } from '../common/storage';
+import {
+  getAllDatasets,
+  getDataset,
+  getTransactions,
+  getTransactionsCount,
+} from './datasets.repository';
+import type { Dataset, Transaction } from '../common/storage';
 
 const SELLER_A = `G${'A'.repeat(55)}`;
 const SELLER_B = `G${'B'.repeat(55)}`;
@@ -61,7 +75,7 @@ const transactions: Transaction[] = [
 function makeApp(): Express {
   const app = express();
   app.use(express.json());
-  app.use('/api/datasets', datasetsRouter);
+  app.use('/api/v1/datasets', datasetsRouter);
   return app;
 }
 
@@ -82,15 +96,6 @@ function signSellerJwt(
   return `${header}.${body}.${signature}`;
 }
 
-async function seedStore(overrides?: Partial<Store>) {
-  await writeStore({
-    datasets: [datasetA, datasetB],
-    transactions,
-    webhooks: [],
-    ...overrides,
-  });
-}
-
 describe('datasets seller dashboard auth', () => {
   let app: Express;
   const originalSellerJwtSecret = process.env.SELLER_JWT_SECRET;
@@ -98,7 +103,17 @@ describe('datasets seller dashboard auth', () => {
   beforeEach(async () => {
     app = makeApp();
     process.env.SELLER_JWT_SECRET = 'test-secret';
-    await seedStore();
+
+    vi.mocked(getAllDatasets).mockResolvedValue([datasetA, datasetB]);
+    vi.mocked(getDataset).mockImplementation(async (id: string) =>
+      [datasetA, datasetB].find(d => d.id === id),
+    );
+    vi.mocked(getTransactions).mockImplementation(async (datasetId?: string) =>
+      datasetId ? transactions.filter(t => t.datasetId === datasetId) : transactions,
+    );
+    vi.mocked(getTransactionsCount).mockImplementation(async (datasetId?: string) =>
+      datasetId ? transactions.filter(t => t.datasetId === datasetId).length : transactions.length,
+    );
   });
 
   afterEach(() => {
@@ -113,14 +128,14 @@ describe('datasets seller dashboard auth', () => {
   it('rejects seller dashboard requests when the JWT secret is missing', async () => {
     delete process.env.SELLER_JWT_SECRET;
 
-    const res = await request(app).get('/api/datasets/seller/dashboard');
+    const res = await request(app).get('/api/v1/datasets/seller/dashboard');
 
     expect(res.status).toBe(503);
     expect(res.body.error).toContain('SELLER_JWT_SECRET');
   });
 
   it('requires a bearer token for seller dashboard data', async () => {
-    const res = await request(app).get('/api/datasets/seller/dashboard');
+    const res = await request(app).get('/api/v1/datasets/seller/dashboard');
 
     expect(res.status).toBe(401);
     expect(res.body.error).toContain('Authorization header');
@@ -133,7 +148,7 @@ describe('datasets seller dashboard auth', () => {
     });
 
     const res = await request(app)
-      .get('/api/datasets/seller/dashboard')
+      .get('/api/v1/datasets/seller/dashboard')
       .set('Authorization', `Bearer ${expiredToken}`);
 
     expect(res.status).toBe(401);
@@ -147,7 +162,7 @@ describe('datasets seller dashboard auth', () => {
     });
 
     const res = await request(app)
-      .get('/api/datasets/seller/dashboard')
+      .get('/api/v1/datasets/seller/dashboard')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
@@ -172,7 +187,7 @@ describe('datasets seller dashboard auth', () => {
     });
 
     const res = await request(app)
-      .get('/api/datasets/transactions')
+      .get('/api/v1/datasets/transactions')
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
@@ -188,9 +203,58 @@ describe('datasets seller dashboard auth', () => {
     });
 
     const res = await request(app)
-      .get(`/api/datasets/${datasetB.id}/transactions`)
+      .get(`/api/v1/datasets/${datasetB.id}/transactions`)
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe('datasets listing pagination', () => {
+  let app: Express;
+
+  beforeEach(async () => {
+    app = makeApp();
+    await seedStore();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the requested page slice with pagination metadata', async () => {
+    const res = await request(app).get('/api/datasets?page=2&limit=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 2,
+      page: 2,
+      pageSize: 1,
+      totalPages: 2,
+    });
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ id: datasetB.id });
+    expect(res.body.data[0].data).toBeUndefined();
+  });
+
+  it('defaults limit to 20 when not specified', async () => {
+    const res = await request(app).get('/api/datasets');
+
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(1);
+    expect(res.body.pageSize).toBe(20);
+    expect(res.body.total).toBe(2);
+    expect(res.body.totalPages).toBe(1);
+    expect(res.body.data).toHaveLength(2);
+  });
+
+  it('caps limit at 100 instead of rejecting the request', async () => {
+    const res = await request(app).get('/api/datasets?limit=500');
+
+    expect(res.status).toBe(200);
+    expect(res.body.pageSize).toBe(100);
+    expect(res.body.total).toBe(2);
+    expect(res.body.totalPages).toBe(1);
+    expect(res.body.data).toHaveLength(2);
   });
 });

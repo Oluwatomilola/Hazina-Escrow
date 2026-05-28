@@ -76,7 +76,7 @@ export const AGENT_REQUEST_TIMEOUT_MS = 120_000; // AI/agent operations may take
 
 function getApiBaseUrl(): string {
   const { apiUrl } = getEnv();
-  return `${apiUrl}/api`;
+  return `${apiUrl}/api/v1`;
 }
 
 function getApiKey(): string {
@@ -179,6 +179,7 @@ export interface PaginatedDatasets {
   data: DatasetMeta[];
   total: number;
   page: number;
+  pageSize: number;
   totalPages: number;
 }
 
@@ -199,7 +200,6 @@ export interface QueryResult {
     deliveryError?: string;
   };
 }
-
 
 interface RequestOptions extends RequestInit {
   /** Per-call override of the abort timeout, in milliseconds. */
