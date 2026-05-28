@@ -16,6 +16,11 @@ const researchDemoSchema = z.object({
   query: z.string().trim().min(5, 'query must be at least 5 characters').max(1000),
 });
 
+function stripRawAnalysis<T extends { rawAnalysis?: string }>(report: T): Omit<T, 'rawAnalysis'> {
+  const { rawAnalysis: _rawAnalysis, ...clientReport } = report;
+  return clientReport;
+}
+
 /**
  * @openapi
  * /api/agent/info:
@@ -165,7 +170,7 @@ agentRouter.post('/research', validateBody(researchSchema), async (req: Request,
       success: true,
       jobId: job.jobId,
       query: job.query,
-      report: job.report,
+      report: stripRawAnalysis(job.report),
       payments: {
         humanPaid: 1,
         currency: 'USDC',
@@ -215,7 +220,7 @@ agentRouter.post('/research/demo', validateBody(researchDemoSchema), async (req:
       demo: true,
       jobId: job.jobId,
       query: job.query,
-      report: job.report,
+      report: stripRawAnalysis(job.report),
       payments: {
         humanPaid: 1,
         currency: 'USDC',
