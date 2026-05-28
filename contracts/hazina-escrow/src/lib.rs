@@ -514,6 +514,11 @@ impl HazinaEscrow {
             env.storage()
                 .persistent()
                 .set(&EscrowKey::Record(next_id), &record);
+            env.storage().persistent().extend_ttl(
+                &EscrowKey::Record(next_id),
+                ESCROW_MIN_TTL,
+                ESCROW_BUMP_LEDGERS,
+            );
             next_id += 1;
             j += 1;
         }
