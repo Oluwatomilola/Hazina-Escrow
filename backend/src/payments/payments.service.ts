@@ -13,6 +13,12 @@ import { generateDataSummary } from '../ai/claude.service';
 import { notifySeller } from '../webhooks/webhook.service';
 import { transactionEventEmitter } from '../websocket/transaction-events';
 import { verifyStellarPayment } from './stellar.service';
+} from "../common/storage";
+import { sellerShare, platformFee as computePlatformFee } from "../common/constants";
+import { generateDataSummary } from "../ai/claude.service";
+import { notifySeller } from "../webhooks/webhook.service";
+import { transactionEventEmitter } from "../websocket/transaction-events";
+import { verifyStellarPayment, PaymentError } from "./stellar.service";
 
 export interface DeliveryResult {
   success: boolean;
@@ -133,8 +139,8 @@ export async function markDeliveryFailure(params: {
     warning: 'DELIVERY_PENDING_RETRY' as const,
     transaction: {
       hash: txHash,
-      status: 'delivery_failed',
-      deliveryStatus: 'failed',
+      status: "delivery_failed",
+      deliveryStatus: "failed",
       amount: dataset.pricePerQuery,
       sellerReceived: sellerShare(dataset.pricePerQuery),
       platformFee: computePlatformFee(dataset.pricePerQuery),
@@ -197,6 +203,52 @@ export async function processPayment(params: {
       error: verification.reason || 'Stellar payment verification failed',
     });
     throw new Error(verification.reason || 'Stellar payment verification failed');
+
+  }
+
+  // Bind the payment to this specific dataset via its memo.
+  // Without this check a buyer could redirect a payment made for dataset A (using
+  // its memo) to unlock dataset B if both share the same price — the memo on the
+  // Stellar transaction is the only artefact that ties a payment to a purchase.
+  const txMemo = verification.memo ?? '';
+  if (!txMemo) {
+    throw new Error(
+      'Payment must include the memo provided at query initiation — memo-less payments cannot be bound to a specific dataset',
+    );
+  }
+  const memoOwner = await getTransactionByMemo(txMemo);
+  if (!memoOwner) {
+    throw new Error(
+      'Payment memo does not match any pending transaction — ensure you used the memo from your query initiation',
+    );
+  }
+  if (memoOwner.datasetId !== datasetId) {
+    throw new Error(
+      'Payment memo belongs to a different dataset — use the memo generated for this specific query',
+    );
+    throw new PaymentError(verification.reason || "Stellar payment verification failed");
+  }
+
+  // Bind the payment to this specific dataset via its memo.
+  // Without this check a buyer could redirect a payment made for dataset A (using
+  // its memo) to unlock dataset B if both share the same price — the memo on the
+  // Stellar transaction is the only artefact that ties a payment to a purchase.
+  const txMemo = verification.memo ?? '';
+  if (!txMemo) {
+    throw new PaymentError(
+      'Payment must include the memo provided at query initiation — memo-less payments cannot be bound to a specific dataset',
+    );
+  }
+  const memoOwner = await getTransactionByMemo(txMemo);
+  if (!memoOwner) {
+    throw new PaymentError(
+      'Payment memo does not match any pending transaction — ensure you used the memo from your query initiation',
+    );
+  }
+  if (memoOwner.datasetId !== datasetId) {
+    throw new PaymentError(
+      'Payment memo belongs to a different dataset — use the memo generated for this specific query',
+    );
   }
 
   // Update or add transaction

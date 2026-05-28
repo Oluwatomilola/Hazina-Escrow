@@ -108,7 +108,8 @@ export class WebSocketServer_Hazina {
   /**
    * Handle incoming client messages
    */
-  private handleMessage(clientId: string, data: RawData): void {
+
+  private handleMessage(clientId: string, data: any): void {
     const session = this.clients.get(clientId);
     if (!session) return;
 
@@ -256,6 +257,7 @@ export class WebSocketServer_Hazina {
         return (
           session.subscribed.datasetIds.has(evt.data.datasetId) ||
           session.subscribed.transactionIds.has(evt.data.transactionId)
+
         const dataEvent = evt as unknown;
         return (
           session.subscribed.datasetIds.has(dataEvent.data.datasetId) ||

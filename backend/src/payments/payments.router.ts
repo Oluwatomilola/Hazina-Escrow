@@ -16,8 +16,29 @@ import { sanitizeUserText } from '../common/sanitize';
 import { transactionEventEmitter } from '../websocket/transaction-events';
 import { requireAdminKey } from '../common/auth.middleware';
 import { deliverVerifiedPayment, markDeliveryFailure, processPayment } from './payments.service';
+} from "../common/storage";
+import { validateBody } from "../common/validate";
+import { sellerShare, platformFee as computePlatformFee } from "../common/constants";
+import { generateDataSummary } from "../ai/claude.service";
+import { sanitizeUserText } from "../common/sanitize";
+import { requireAdminKey } from "../common/auth.middleware";
+import {
+  getManualReviewPayouts,
+  recordPayoutFailure,
+  runDuePayoutRetries,
+  scheduleRetrySweep,
+} from "./payout-retry.service";
+import { transactionEventEmitter } from "../websocket/transaction-events";
+import { requireAdminKey } from "../common/auth.middleware";
+import {
+  deliverVerifiedPayment,
+  markDeliveryFailure,
+  processPayment,
+} from "./payments.service";
+import { PaymentError, StellarTimeoutError } from "./stellar.service";
 
 export const paymentsRouter = Router();
+scheduleRetrySweep(1_000);
 
 const verifySchema = z.object({
   txHash: z.string().min(1),
@@ -142,6 +163,7 @@ const verifyDemoSchema = z.object({
 
 
 import { v4 as uuidv4 } from "uuid";
+ main
 // POST /api/query/:id — initiate query, returns 402 Payment Required
 paymentsRouter.post('/query/:id', async (req: Request, res: Response) => {
   const dataset = await getDataset(req.params.id);
@@ -240,6 +262,32 @@ export function stopDeliveryRetryWorker(): void {
   deliveryRetryWorker = null;
 }
 
+    // Forward 95% to seller on-chain
+    let sellerTxHash: string | undefined;
+    const sellerAmount = parseFloat((dataset.pricePerQuery * 0.95).toFixed(7));
+    try {
+      const payment = await sendUsdcPayment({
+        destinationAddress: dataset.sellerWallet,
+        amount: sellerAmount.toFixed(7),
+        memo: `hazina-${dataset.id.slice(0, 10)}`,
+      });
+      sellerTxHash = payment.txHash;
+      console.log(
+        `[Escrow] Paid seller ${sellerAmount} USDC → ${dataset.sellerWallet} (${sellerTxHash})`,
+      );
+    } catch (payErr) {
+      console.warn(
+        "[Escrow] Seller payment failed (data still delivered):",
+        payErr instanceof Error ? payErr.message : payErr,
+      );
+      await recordPayoutFailure({
+        datasetId: dataset.id,
+        sellerWallet: dataset.sellerWallet,
+        buyerTxHash: txHash,
+        intendedAmount: sellerAmount,
+        error: payErr instanceof Error ? payErr.message : String(payErr),
+      });
+    }
 // POST /api/verify/:id — verify payment on Stellar and release the dataset to the buyer
 paymentsRouter.post(
   '/verify/:id',
@@ -260,6 +308,45 @@ paymentsRouter.post(
         datasetId: dataset.id,
         buyerQuestion,
       });
+
+    if (!dataset) return res.status(404).json({ error: 'Dataset not found' });
+
+    if (await txHashUsed(txHash)) {
+      return res.status(400).json({ error: 'Escrow already processed' });
+    }
+
+    try {
+      const result = await processPayment({
+        txHash,
+        datasetId: dataset.id,
+        buyerQuestion,
+      });
+
+// GET /api/admin/payouts/stuck — list payouts requiring manual review
+paymentsRouter.get("/admin/payouts/stuck", requireAdminKey, (_req: Request, res: Response) => {
+  return res.json({
+    payouts: getManualReviewPayouts(),
+  });
+});
+
+    return res.json({
+      ...result,
+      warning: null,
+    });
+  } catch (err) {
+    if (err instanceof StellarTimeoutError) {
+      // Network-level failure — not the client's fault
+      return res.status(503).json({ error: err.message });
+    }
+    if (err instanceof PaymentError) {
+      // Intentional user-facing error with a safe message we authored
+      return res.status(400).json({ error: err.message });
+    }
+    // Unexpected error — log full details server-side, send nothing internal to client
+    console.error("[Verify] Unexpected error processing payment:", err);
+    return res.status(500).json({ error: "Payment verification failed — please try again" });
+  }
+});
 
       if (result.pendingDelivery) {
         return res.status(202).json(result);
