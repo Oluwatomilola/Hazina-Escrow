@@ -7,6 +7,12 @@ vi.mock('../webhooks/webhook.service', () => ({
   notifySeller: vi.fn(() => Promise.resolve()),
 }));
 
+vi.mock('./datasets.repository', () => ({
+  getAllDatasets: vi.fn(),
+  getDataset: vi.fn(),
+  addDataset: vi.fn(),
+  getTransactions: vi.fn(),
+  getTransactionsCount: vi.fn(),
 const { mockIsValidStellarAddress } = vi.hoisted(() => ({
   mockIsValidStellarAddress: vi.fn<[string], boolean>(),
 }));

@@ -8,6 +8,14 @@ import {
   getFailedDeliveryTransactions,
   txHashUsed,
   getUnpaidTransactions,
+} from '../common/storage';
+import { validateBody } from '../common/validate';
+import { sellerShare, platformFee as computePlatformFee } from '../common/constants';
+import { generateDataSummary } from '../ai/claude.service';
+import { sanitizeUserText } from '../common/sanitize';
+import { transactionEventEmitter } from '../websocket/transaction-events';
+import { requireAdminKey } from '../common/auth.middleware';
+import { deliverVerifiedPayment, markDeliveryFailure, processPayment } from './payments.service';
 } from "../common/storage";
 import { validateBody } from "../common/validate";
 import { sellerShare, platformFee as computePlatformFee } from "../common/constants";
@@ -301,6 +309,17 @@ paymentsRouter.post(
         buyerQuestion,
       });
 
+    if (await txHashUsed(txHash)) {
+      return res.status(400).json({ error: 'Escrow already processed' });
+    }
+
+    try {
+      const result = await processPayment({
+        txHash,
+        datasetId: dataset.id,
+        buyerQuestion,
+      });
+
 // GET /api/admin/payouts/stuck — list payouts requiring manual review
 paymentsRouter.get("/admin/payouts/stuck", requireAdminKey, (_req: Request, res: Response) => {
   return res.json({
@@ -332,16 +351,9 @@ paymentsRouter.post("/verify/:id/demo", validateBody(verifyDemoSchema), async (r
   const { buyerQuestion } = req.body as z.infer<typeof verifyDemoSchema>;
   const dataset = await getDataset(req.params.id);
 
-  if (!dataset) return res.status(404).json({ error: "Dataset not found" });
-
-  const transactionId = `tx-demo-id-${Date.now()}`; // Simplified for demo
-
-  // Emit verifying status
-  transactionEventEmitter.updateTransactionStatus(
-    transactionId,
-    dataset.id,
-    "verifying"
-  );
+      if (result.pendingDelivery) {
+        return res.status(202).json(result);
+      }
 
       return res.json({
         ...result,
