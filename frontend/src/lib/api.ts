@@ -179,6 +179,7 @@ export interface PaginatedDatasets {
   data: DatasetMeta[];
   total: number;
   page: number;
+  pageSize: number;
   totalPages: number;
 }
 

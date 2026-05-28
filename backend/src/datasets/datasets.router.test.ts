@@ -195,3 +195,51 @@ describe('datasets seller dashboard auth', () => {
   });
 });
 
+describe('datasets listing pagination', () => {
+  let app: Express;
+
+  beforeEach(async () => {
+    app = makeApp();
+    await seedStore();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the requested page slice with pagination metadata', async () => {
+    const res = await request(app).get('/api/datasets?page=2&limit=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 2,
+      page: 2,
+      pageSize: 1,
+      totalPages: 2,
+    });
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ id: datasetB.id });
+    expect(res.body.data[0].data).toBeUndefined();
+  });
+
+  it('defaults limit to 20 when not specified', async () => {
+    const res = await request(app).get('/api/datasets');
+
+    expect(res.status).toBe(200);
+    expect(res.body.page).toBe(1);
+    expect(res.body.pageSize).toBe(20);
+    expect(res.body.total).toBe(2);
+    expect(res.body.totalPages).toBe(1);
+    expect(res.body.data).toHaveLength(2);
+  });
+
+  it('caps limit at 100 instead of rejecting the request', async () => {
+    const res = await request(app).get('/api/datasets?limit=500');
+
+    expect(res.status).toBe(200);
+    expect(res.body.pageSize).toBe(100);
+    expect(res.body.total).toBe(2);
+    expect(res.body.totalPages).toBe(1);
+    expect(res.body.data).toHaveLength(2);
+  });
+});
