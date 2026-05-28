@@ -2,13 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCreate = vi.fn();
 
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    messages: {
-      create: mockCreate,
-    },
-  })),
-}));
+vi.mock('@anthropic-ai/sdk', () => {
+  class APITimeoutError extends Error {
+    constructor() {
+      super('Request timed out');
+      this.name = 'APITimeoutError';
+    }
+  }
+
+  const MockAnthropic = vi.fn().mockImplementation(() => ({
+    messages: { create: mockCreate },
+  })) as unknown as { new (): object; APITimeoutError: typeof APITimeoutError };
+  MockAnthropic.APITimeoutError = APITimeoutError;
+
+  return { default: MockAnthropic };
+});
 
 import {
   generateDataSummary,
@@ -105,14 +113,9 @@ describe('generateDataSummary timeout handling', () => {
   });
 
   it('throws AnthropicTimeoutError when SDK raises APITimeoutError', async () => {
-    // Simulate the Anthropic SDK throwing its own APITimeoutError
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const timeoutErr = new Anthropic.APITimeoutError({
-      url: '/messages',
-      timeout: 60000,
-      headers: undefined,
-      error: undefined,
-    });
+    // Simulate the Anthropic SDK throwing a timeout error
+    const timeoutErr = new Error('Request timed out');
+    timeoutErr.name = 'APITimeoutError';
     mockCreate.mockRejectedValue(timeoutErr);
 
     const { AnthropicTimeoutError } = await import('./claude.service');
@@ -123,13 +126,9 @@ describe('generateDataSummary timeout handling', () => {
   });
 
   it('AnthropicTimeoutError message is user-friendly', async () => {
-    const { default: Anthropic } = await import('@anthropic-ai/sdk');
-    const timeoutErr = new Anthropic.APITimeoutError({
-      url: '/messages',
-      timeout: 60000,
-      headers: undefined,
-      error: undefined,
-    });
+    // Simulate the Anthropic SDK throwing a timeout error
+    const timeoutErr = new Error('Request timed out');
+    timeoutErr.name = 'APITimeoutError';
     mockCreate.mockRejectedValue(timeoutErr);
 
     const { AnthropicTimeoutError } = await import('./claude.service');
