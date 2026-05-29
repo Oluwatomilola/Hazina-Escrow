@@ -44,6 +44,7 @@ describe('CORS configuration', () => {
         expect(allow).toBe(true);
       },
     );
+
     if (typeof options.origin === 'function') {
       options.origin('https://admin.hazina.example', (error: Error | null, origin: any) => {
         expect(error).toBeNull();

@@ -28,6 +28,7 @@ export const datasets = pgTable(
     createdAtIdx: index('datasets_created_at_idx').on(table.createdAt),
   }),
 );
+ main
 
 export const transactions = pgTable('transactions', {
   id: text('id').primaryKey(),
@@ -66,6 +67,7 @@ export const webhooks = pgTable('webhooks', {
   } else {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { sqliteTable, text, integer } = require('drizzle-orm/sqlite-core');
+
 // ── SQLite tables (used when DATABASE_URL is not postgres) ───────────────────
 
 export const datasetsSqlite = sqliteTable(

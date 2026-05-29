@@ -8,8 +8,6 @@
     "build": "tsc",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src --ext .ts",
     "lint:fix": "ESLINT_USE_FLAT_CONFIG=false eslint src --ext .ts --fix",
-    "lint": "eslint src",
-    "lint:fix": "eslint src --fix",
     "seed": "ts-node src/db/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",

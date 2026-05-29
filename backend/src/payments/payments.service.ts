@@ -12,6 +12,10 @@ import { sellerShare, platformFee as computePlatformFee } from '../common/consta
 import { generateDataSummary } from '../ai/claude.service';
 import { notifySeller } from '../webhooks/webhook.service';
 import { transactionEventEmitter } from '../websocket/transaction-events';
+// import { sellerShare, platformFee as computePlatformFee } from '../common/constants';
+// import { generateDataSummary } from '../ai/claude.service';
+// import { notifySeller } from '../webhooks/webhook.service';
+// import { transactionEventEmitter } from '../websocket/transaction-events';
 import { verifyStellarPayment } from './stellar.service';
 } from "../common/storage";
 import { sellerShare, platformFee as computePlatformFee } from "../common/constants";
@@ -139,8 +143,10 @@ export async function markDeliveryFailure(params: {
     warning: 'DELIVERY_PENDING_RETRY' as const,
     transaction: {
       hash: txHash,
-      status: "delivery_failed",
-      deliveryStatus: "failed",
+      status: 'delivery_failed',
+      deliveryStatus: 'failed',
+//       status: "delivery_failed",
+//       deliveryStatus: "failed",
       amount: dataset.pricePerQuery,
       sellerReceived: sellerShare(dataset.pricePerQuery),
       platformFee: computePlatformFee(dataset.pricePerQuery),
@@ -222,12 +228,12 @@ export async function processPayment(params: {
       'Payment memo does not match any pending transaction — ensure you used the memo from your query initiation',
     );
   }
-  if (memoOwner.datasetId !== datasetId) {
-    throw new Error(
-      'Payment memo belongs to a different dataset — use the memo generated for this specific query',
-    );
-    throw new PaymentError(verification.reason || "Stellar payment verification failed");
-  }
+//   if (memoOwner.datasetId !== datasetId) {
+//     throw new Error(
+//       'Payment memo belongs to a different dataset — use the memo generated for this specific query',
+//     );
+//     throw new PaymentError(verification.reason || "Stellar payment verification failed");
+//   }
 
   // Bind the payment to this specific dataset via its memo.
   // Without this check a buyer could redirect a payment made for dataset A (using
@@ -245,10 +251,6 @@ export async function processPayment(params: {
       'Payment memo does not match any pending transaction — ensure you used the memo from your query initiation',
     );
   }
-  if (memoOwner.datasetId !== datasetId) {
-    throw new PaymentError(
-      'Payment memo belongs to a different dataset — use the memo generated for this specific query',
-    );
   }
 
   // Update or add transaction

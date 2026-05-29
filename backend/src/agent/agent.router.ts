@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { runResearchAgent, runResearchAgentDemo, SELLER_TYPES, AGENT_FEE_USDC } from './agent.service';
+import { runResearchAgent, runResearchAgentDemo, SELLER_TYPES, AGENT_FEE_USDC, IdempotentJobResult } from './agent.service';
 import { getAgentPublicKey } from './agent.wallet';
 import { validateBody } from '../common/validate';
 import { getAllDatasets } from '../common/storage';
@@ -15,6 +15,11 @@ const researchSchema = z.object({
 const researchDemoSchema = z.object({
   query: z.string().trim().min(5, 'query must be at least 5 characters').max(1000),
 });
+
+function stripRawAnalysis<T extends { rawAnalysis?: string }>(report: T): Omit<T, 'rawAnalysis'> {
+  const { rawAnalysis: _rawAnalysis, ...clientReport } = report;
+  return clientReport;
+}
 
 /**
  * @openapi
@@ -159,13 +164,31 @@ agentRouter.post('/research', validateBody(researchSchema), async (req: Request,
 
   try {
     console.log(`[Agent] New research job: "${query}"`);
-    const job = await runResearchAgent(query, txHash);
+    const result = await runResearchAgent(query, txHash);
 
+    // Idempotency hit — this txHash was already processed successfully.
+    // Return the cached outcome (HTTP 200) so clients can distinguish a
+    // replay from a genuine error without retrying unnecessarily.
+    if ((result as IdempotentJobResult).idempotent) {
+      const cached = result as IdempotentJobResult;
+      return res.status(200).json({
+        success: true,
+        idempotent: true,
+        message:
+          'This transaction hash was already used for a completed research job. Returning cached result.',
+        txHash: cached.txHash,
+        query: cached.query,
+        cachedSummary: cached.cachedSummary,
+        originalTimestamp: cached.originalTimestamp,
+      });
+    }
+
+    const job = result as import('./agent.service').AgentJob;
     return res.json({
       success: true,
       jobId: job.jobId,
       query: job.query,
-      report: job.report,
+      report: stripRawAnalysis(job.report),
       payments: {
         humanPaid: 1,
         currency: 'USDC',
@@ -215,7 +238,7 @@ agentRouter.post('/research/demo', validateBody(researchDemoSchema), async (req:
       demo: true,
       jobId: job.jobId,
       query: job.query,
-      report: job.report,
+      report: stripRawAnalysis(job.report),
       payments: {
         humanPaid: 1,
         currency: 'USDC',

@@ -93,6 +93,7 @@ pub enum HazinaEscrowError {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 
+
 pub struct EscrowRecord {
     pub escrow_id: u64,
     pub dataset_id: String,
@@ -655,7 +656,6 @@ impl HazinaEscrow {
         admin.require_auth();
         Self::assert_admin(&env, &admin);
         Self::assert_not_paused(&env);
-
         let mut record = Self::read_escrow(&env, escrow_id)?;
 
         // Bump TTL before reading to prevent expiry during read
@@ -664,6 +664,7 @@ impl HazinaEscrow {
             ESCROW_MIN_TTL,
             ESCROW_BUMP_LEDGERS,
         );
+
 
         let record: EscrowRecord = env
             .storage()
@@ -1659,6 +1660,28 @@ mod tests {
         client.pause(&admin);
         client.refund(&admin, &escrow_id);
     }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_unpause_requires_admin() {
+        let (env, client, admin, _buyer, _seller, _usdc) = setup();
+        let outsider = Address::generate(&env);
+        client.pause(&admin);
+        client.unpause(&outsider);
+    }
+
+    #[test]
+    fn test_get_escrow_works_while_paused() {
+        let (env, client, admin, buyer, seller, usdc) = setup();
+
+        let escrow_id = client.lock(
+            &buyer,
+            &seller,
+            &usdc,
+            &1_000_000,
+            &dataset_id(&env, "ds-read-while-paused"),
+        );
+
 
     #[test]
     #[should_panic(expected = "Error(Contract, #3)")]
